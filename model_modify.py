@@ -65,7 +65,7 @@ def get_conv_layers_list(model):
     layers = model.layers
     for i,l in enumerate(layers):
         if isinstance(l, Conv2D) and l.kernel.shape.as_list()[:2] == [filter_size, filter_size]:
-            res += [i]
+            res+= [i]
     return res[:pair_layers_num]
 
 def get_kernels_stack(model, conv_layers_list):
@@ -81,8 +81,6 @@ def get_kernels_stack(model, conv_layers_list):
                 if abs(weights_slice.max()) + abs(weights_slice.min()) > zero_thresh:
                     kernels += [(weights_slice)]
                     index += [(l, i, s)]
-                else:
-                    print (l,i,s)
                 kernel_num += 1
     print "num of total kernels:", kernel_num
 

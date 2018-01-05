@@ -38,20 +38,20 @@ def main():
     ## please check your file name first!!!
     ## don't cover existing pair files!!!
     file = "./tmp/resnet10_pairs_"+str(modi.r_thresh)+"_"+str(modi.pair_layers_num)+".txt"
-    #modi.load_modified_model_from_file(model, file_load=file)
+    modi.load_modified_model_from_file(model, file_load=file)
     #modi.modify_model(model, file_save=file)
 
-   # trte.fine_tune(model)
+    trte.fine_tune(model)
     #trte.load_and_train(model, 200, None, True)
-    #test_result = trte.load_and_test(model)
+    test_result = trte.load_and_test(model)
     result_names = model.metrics_names
 
     cprint("original test result:", "blue")
     print result_names[0], ": ", ori_result[0]
     print result_names[1], ": ", ori_result[1]
-    #cprint("modified test result:", "blue")
-    #print result_names[0], ": ", test_result[0]
-    #print result_names[1], ": ", test_result[1]
+    cprint("modified test result:", "blue")
+    print result_names[0], ": ", test_result[0]
+    print result_names[1], ": ", test_result[1]
     
 
 
