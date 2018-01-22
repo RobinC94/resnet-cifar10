@@ -16,6 +16,7 @@ from termcolor import cprint
 ##config params
 pair_layers_num = 0
 filter_size = 3
+cifar10_path = "/data1/datasets/cifar/cifar-10-batches-py/"
 
 ####################################
 ## public API
@@ -68,7 +69,7 @@ def get_conv_layers_list(model):
 
 def load_data(data_path=None):
     if data_path == None:
-        path = './cifar-10-batches-py/'
+        path = cifar10_path
     else:
         path = data_path
 

@@ -1,4 +1,4 @@
-import os
+import sys,os
 
 import numpy as np
 import scipy.stats as stats
@@ -7,16 +7,19 @@ import resnet
 from keras.layers.convolutional import Conv2D
 from termcolor import cprint
 
+from Bio import Cluster
+
 ####################################
 ##config params
 pair_layers_num = 0
+kmeans_k=255
 r_thresh = 1
 filter_size = 3
 zero_thresh = 1e-4
 
 ####################################
 ## public API
-def modify_model(model, file_save = None):
+def modify_model(model, k=kmeans_k, file_save = None):
 
     # 1 select conv layers
     conv_layers_list = get_conv_layers_list(model)
@@ -26,12 +29,8 @@ def modify_model(model, file_save = None):
     kernels_stack = get_kernels_stack(model, conv_layers_list)
     print "num of searched kernels:" + str(len(kernels_stack.keys()))
 
-    # 3 generate pairs
-    pair_res = generate_pair_res(kernels_stack, file_save)
-    print "num of pairs is:" + str(len(pair_res))
-
-    # 4 modify model
-    modify_kernels_stack(kernels_stack, pair_res)
+    # 3 modify with kmeans
+    modify_kernels_with_kmeans(kernels_stack, k=k, f_save=file_save)
     set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list)
 
 def load_modified_model_from_file(model, file_load = None):
@@ -44,15 +43,9 @@ def load_modified_model_from_file(model, file_load = None):
     kernels_stack = get_kernels_stack(model, conv_layers_list)
     print "num of searched kernels:" + str(len(kernels_stack.keys()))
 
-    # 3 get pairs
-    f_load = open(file_load, "r")
-    pair_res = load_pairs_from_file(f_load, kernels_stack)
-    print "num of pairs is:" + str(len(pair_res))
-    f_load.close()
-
-    # 4 modify model
-    modify_kernels_stack(kernels_stack, pair_res)
+    modify_kernels_with_centroids(kernels_stack, f_load=file_load)
     set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list)
+
 
 ########################################
 ## private API
@@ -78,9 +71,9 @@ def get_kernels_stack(model, conv_layers_list):
         for i in range(model.layers[l].filters):  ##kernel num
             for s in range(model.layers[l].input_shape[-1]):  # kernel depth
                 weights_slice = weights[:, :, s, i]  # HWCK
-                if abs(weights_slice.max()) + abs(weights_slice.min()) > zero_thresh:
-                    kernels += [(weights_slice)]
-                    index += [(l, i, s)]
+                #if abs(weights_slice.max()) + abs(weights_slice.min()) > zero_thresh:
+                kernels += [(weights_slice)]
+                index += [(l, i, s)]
                 kernel_num += 1
     print "num of total kernels:", kernel_num
 
@@ -96,72 +89,81 @@ def least_square(dataa, datab):
     err = np.sum(np.abs(a * dataa + b - datab))
     return (a, b, err)
 
-def generate_pair_res(kernels_stack, file=None):
-    pair_res=[]
-    id_list = kernels_stack.keys()
-    kernels_list = {}
 
-    for id in id_list:
-        kernels_list[id] = [(kernels_stack[id].flatten()), 0]
+def modify_kernels_with_kmeans(kernels_stack, k=kmeans_k, f_save=None):
+    kernels_keys=kernels_stack.keys()
+    kernels_num=len(kernels_keys)
 
-    i = 0
-    num_template = 0
-    if file <> None:
-        f = open(file, "w")
+    kernels_array=np.zeros((kernels_num, filter_size**2))
+    for i in range(kernels_num):
+        kernel_id=kernels_keys[i]
+        kernels_array[i]=kernels_stack[kernel_id].flatten()
 
-    while i < len(id_list) - 1:
-        if kernels_list[id_list[i]][1] <> 0:
-            i += 1
-            continue
+    print "start clustering"
 
-        j = i + 1
-        while j < len(id_list):
-            if kernels_list[id_list[j]][1] <> 0:
-                j += 1
-                continue
-            pre = stats.pearsonr(kernels_list[id_list[i]][0], kernels_list[id_list[j]][0])[0]
-            if abs(pre) > r_thresh:
-                fit_res = least_square(kernels_list[id_list[i]][0], kernels_list[id_list[j]][0])
-                pair_res += [(id_list[i], id_list[j], fit_res)]
-                print i, j, pre, fit_res[2]
-                if file <> None:
-                    print >> f, i, j, fit_res[0], fit_res[1], fit_res[2]
+    clusterid, error, nfound = Cluster.kcluster(kernels_array, nclusters=k,dist='a')
 
-                if kernels_list[id_list[i]][1] == 0:
-                    num_template += 1
-                kernels_list[id_list[i]][1] = 1
-                kernels_list[id_list[j]][1] = 2
-            j += 1
-        i += 1
+    cdata, cmask = Cluster.clustercentroids(kernels_array,clusterid=clusterid,)
 
-    if file <> None:
-        f.close()
-    print "num of template kernels:" + str(num_template)
-    return pair_res
+    print "end clustering"
 
-def load_pairs_from_file(f, kernels_stack):
-    pair_res=[]
-    id_list = kernels_stack.keys()
-    temp_num = 0
-    x_last = -1
-    for f_line in f:
-        (x, y, a, b, err)=f_line.split(' ')
-        if int(x) <> x_last:
-            x_last = int(x)
-            temp_num += 1
-        pair_res += [(id_list[int(x)], id_list[int(y)],(float(a), float(b), float(err)))]
+    avg_sum=0
+    for i in range(kernels_num):
+        kernel_id = kernels_keys[i]
+        cent_id=clusterid[i]
+        kernel=kernels_array[i]
+        cent=cdata[cent_id]
+        a,b,err=least_square(cent,kernel)
+        r=abs(stats.pearsonr(kernel,cent)[0])
+        avg_sum+=r
+        kernels_stack[kernel_id]=a*cent.reshape((3,3))+b
+    avg=avg_sum/kernels_num
 
-    print "loading pairs done"
-    print "num of templates is: " + str(temp_num)
-    return pair_res
+    print "average r2:",avg
 
-def modify_kernels_stack(kernels_stack, pair_res):
-    id_list = kernels_stack.keys()
-    for pair in pair_res:
-        (k1, k2, f) = pair
-        a = f[0]
-        b = f[1]
-        kernels_stack[k2] = a*kernels_stack[k1] + b
+    if f_save != None:
+        f_clusterid=f_save+"_clusterid.npy"
+        f_cdata=f_save+"_cdata.npy"
+        np.save(f_clusterid, clusterid)
+        np.save(f_cdata,cdata)
+
+    return kernels_stack
+
+def modify_kernels_with_centroids(kernels_stack,f_load=None):
+    kernels_keys = kernels_stack.keys()
+    kernels_num = len(kernels_keys)
+
+    kernels_array = np.zeros((kernels_num, filter_size ** 2))
+    for i in range(kernels_num):
+        kernel_id = kernels_keys[i]
+        kernels_array[i] = kernels_stack[kernel_id].flatten()
+
+    try:
+        f_clusterid=f_load+"_clusterid.npy"
+        f_cdata = f_load + "_cdata.npy"
+        clusterid=np.load(f_clusterid)
+        cdata=np.load(f_cdata)
+    except:
+        print "cannot load file!"
+        sys.exit(0)
+
+    print "load centroid data done"
+
+    avg_sum = 0
+    for i in range(kernels_num):
+        kernel_id = kernels_keys[i]
+        cent_id = clusterid[i]
+        kernel = kernels_array[i]
+        cent = cdata[cent_id]
+        a, b, err = least_square(cent, kernel)
+        r = abs(stats.pearsonr(kernel, cent)[0])
+        avg_sum += r
+        kernels_stack[kernel_id] = a * cent.reshape((3, 3)) + b
+    avg = avg_sum / kernels_num
+
+    print "average r2:", avg
+
+    return kernels_stack
 
 def set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list):
     for l in conv_layers_list:

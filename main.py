@@ -22,7 +22,7 @@ def print_conv_layer_info(model):
     f.close()
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     model = resnet.ResnetBuilder.build_resnet_10((3,32,32), 10)
     model.load_weights("./weights/resnet10_weights.h5")
 
@@ -31,17 +31,16 @@ def main():
 
     ori_result = trte.load_and_test(model)
 
-    modi.pair_layers_num = 8
-    modi.r_thresh = 0.85
+    pair_layers_num=8
+    kmeans_k = 256
+    modi.pair_layers_num = pair_layers_num
     trte.pair_layers_num = modi.pair_layers_num
 
-    ## please check your file name first!!!
-    ## don't cover existing pair files!!!
-    file = "./tmp/resnet10_pairs_"+str(modi.r_thresh)+"_"+str(modi.pair_layers_num)+".txt"
-    modi.load_modified_model_from_file(model, file_load=file)
-    #modi.modify_model(model, file_save=file)
+    file="./tmp/resnet10_"+str(modi.pair_layers_num) + "_" + str(kmeans_k)
+    modi.modify_model(model, k=kmeans_k, file_save=file)
+    #modi.load_modified_model_from_file(model,file_load=file)
 
-    trte.fine_tune(model)
+    #trte.fine_tune(model,epoch=20)
     #trte.load_and_train(model, 200, None, True)
     test_result = trte.load_and_test(model)
     result_names = model.metrics_names
@@ -52,6 +51,7 @@ def main():
     cprint("modified test result:", "blue")
     print result_names[0], ": ", test_result[0]
     print result_names[1], ": ", test_result[1]
+
     
 
 
