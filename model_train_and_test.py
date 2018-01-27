@@ -28,7 +28,7 @@ def fine_tune(model, epoch = 20, data_path=None, data_argumentation=True):
     for layer_index in conv_layers_list:
         model.layers[layer_index].trainable = False
     # fine tune
-    load_and_train(model, epoch, data_path, data_argumentation)
+    common_train(model, epoch, data_path, data_argumentation)
     cprint("fine tune is done\n", "yellow")
 
 def load_and_test(model, data_path=None):
@@ -98,7 +98,7 @@ def load_data(data_path=None):
 
     return (x_train, y_train), (x_test, y_test)
 
-def load_and_train(model, epoch = 200, data_path=None, data_augmentation=True):
+def common_train(model, epoch = 200, data_path=None, data_augmentation=True):
     lr_reducer = ReduceLROnPlateau(factor=np.sqrt(0.1), cooldown=0, patience=5, min_lr=0.5e-6)
     early_stopper = EarlyStopping(min_delta=0.001, patience=10)
     csv_logger = CSVLogger('fine_tune_resnet18_cifar10.csv')
@@ -162,6 +162,10 @@ def load_and_train(model, epoch = 200, data_path=None, data_augmentation=True):
                             callbacks=[lr_reducer, early_stopper, csv_logger, ckpt],
                             workers = 8,
                             use_multiprocessing = True)
+
+def model_rebuild(model,clusterid,cdata,r_thresh):
+    
+    return model
 
 
 #####################################

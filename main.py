@@ -32,13 +32,14 @@ def main():
     ori_result = trte.load_and_test(model)
 
     pair_layers_num=8
-    kmeans_k = 256
+    kmeans_k = 2048
     modi.pair_layers_num = pair_layers_num
     trte.pair_layers_num = modi.pair_layers_num
+    modi.r_thresh=0
 
     file="./tmp/resnet10_"+str(modi.pair_layers_num) + "_" + str(kmeans_k)
-    modi.modify_model(model, k=kmeans_k, file_save=file)
-    #modi.load_modified_model_from_file(model,file_load=file)
+    #modi.modify_model(model, k=kmeans_k, file_save=file)
+    modi.load_modified_model_from_file(model,file_load=file)
 
     #trte.fine_tune(model,epoch=20)
     #trte.load_and_train(model, 200, None, True)
@@ -52,7 +53,6 @@ def main():
     print result_names[0], ": ", test_result[0]
     print result_names[1], ": ", test_result[1]
 
-    
 
 
 if __name__ == "__main__":
