@@ -7,6 +7,9 @@ from keras.engine import InputSpec,Layer
 from keras.utils import conv_utils
 from keras.regularizers import l2
 
+import tensorflow as tf
+import numpy as np
+
 
 class ModifiedConv2D(Layer):
 
@@ -17,7 +20,7 @@ class ModifiedConv2D(Layer):
                  padding='valid',
                  data_format=None,
                  dilation_rate=1,
-                 #activation=None,
+                 activation=None,
                  use_bias=True,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros',
@@ -35,8 +38,9 @@ class ModifiedConv2D(Layer):
         self.kernel_size = conv_utils.normalize_tuple(kernel_size ,2 ,'kernel_size')
         self.strides = conv_utils.normalize_tuple(strides ,2 ,'strides')
         self.padding = conv_utils.normalize_padding(padding)
-        self.data_format =data_format
+        self.data_format = conv_utils.normalize_data_format(data_format)
         self.dilation_rate =conv_utils.normalize_tuple(dilation_rate ,2 ,'dilation_rate')
+        self.activation = activations.get(activation)
         self.use_bias = use_bias
         self.kernel_initializer = initializers.get(kernel_initializer)
         self.bias_initializer = initializers.get(bias_initializer)
@@ -60,14 +64,15 @@ class ModifiedConv2D(Layer):
                              'should be defined. Found `None`.')
         input_dim = input_shape[channel_axis]
 
-        kernel_num = input_dim * self.filters
+        self.kernel_num = input_dim * self.filters
         if self.modified_id==None:
-            self.modified_id=range(kernel_num)
+            self.modified_id=range(self.kernel_num)
 
-        modified_num =len(self.modified_id)
-        unmodified_num =kernel_num -modified_num
-        unmodified_kernel_shape =self.kernel_size +(unmodified_num,)
-        template_shape =self.kernel_size + (modified_num,)
+        self.modified_num =len(self.modified_id)
+        self.unmodified_num =self.kernel_num -self.modified_num
+        unmodified_kernel_shape =self.kernel_size +(self.unmodified_num,)
+        template_shape =self.kernel_size + (self.modified_num,)
+        self.kernel_shape = self.kernel_size + (input_dim, self.filters)
 
 
         self.unmodified_kernel = self.add_weight(shape=unmodified_kernel_shape,
@@ -77,7 +82,7 @@ class ModifiedConv2D(Layer):
                                                  regularizer=self.kernel_regularizer,
                                                  constraint=self.kernel_constraint)
 
-        self.A =self.add_weight(shape=(modified_num,),
+        self.A =self.add_weight(shape=(self.modified_num,),
                                initializer=self.kernel_initializer,
                                name='A',
                                trainable=True)
@@ -87,11 +92,6 @@ class ModifiedConv2D(Layer):
                                       name='template',
                                       trainable=False,
                                       )
-
-        self.B =self.add_weight(shape=(modified_num,),
-                               initializer=self.kernel_initializer,
-                               name='A',
-                               trainable=True)
 
         if self.use_bias:
             self.bias = self.add_weight(shape=(self.filters,),
@@ -109,15 +109,54 @@ class ModifiedConv2D(Layer):
 
 
     def call(self,inputs,**kwargs):
-        self.modified_kernel =self.A *self.template +self.B
-        self.kernel =1
-        outputs =1
+        if self.data_format=='channels_first':
+            channel_axis =1
+        else:
+            channel_axis = -1
+        input_dim = self.input_spec.axes[channel_axis]
+
+        self.modified_kernel = self.A * self.template
+        modified_kernel_stack = tf.unstack(self.modified_kernel, axis=2)
+        unmodified_kernel_stack = tf.unstack(self.unmodified_kernel, axis=2)
+
+        if self.modified_id[0] == 0:
+            self.kernel = tf.expand_dims(modified_kernel_stack[0], 2)
+            modify_index = 1
+        else:
+            self.kernel = tf.expand_dims(unmodified_kernel_stack[0], 2)
+            modify_index = 0
+
+        kernel_index = 1
+        while kernel_index < self.kernel_num:
+            if modify_index < self.modified_num:
+                if self.modified_id[modify_index] == kernel_index:
+                    kernel_add = tf.expand_dims(modified_kernel_stack[modify_index], 2)
+                    self.kernel = tf.concat([self.kernel, kernel_add], 2)
+                    modify_index += 1
+                else:
+                    unmodify_index = kernel_index - modify_index
+                    kernel_add = tf.expand_dims(unmodified_kernel_stack[unmodify_index], 2)
+                    self.kernel = tf.concat([self.kernel, kernel_add], 2)
+            else:
+                unmodify_index = kernel_index - modify_index
+                kernel_add = tf.expand_dims(unmodified_kernel_stack[unmodify_index], 2)
+                self.kernel = tf.concat([self.kernel, kernel_add], 2)
+            kernel_index += 1
+
+        self.kernel = tf.reshape(self.kernel, self.kernel_shape)
+
+        outputs = K.conv2d(inputs,
+                           self.kernel,
+                           strides=self.strides,
+                           padding=self.padding,
+                           data_format=self.data_format,
+                           dilation_rate=self.dilation_rate)
 
         if self.use_bias:
             outputs =K.bias_add(
                 outputs,
                 self.bias,
-                data_format=self.data_format()
+                data_format=self.data_format
             )
 
         return outputs
@@ -149,6 +188,9 @@ class ModifiedConv2D(Layer):
                 new_space.append(new_dim)
 
             return (input_shape[0], self.filters) + tuple(new_space)
+
+        else:
+            raise ValueError('The data format should be defined. Found `None`.')
 
 
     def get_config(self):
@@ -182,7 +224,7 @@ if __name__ == "__main__":
 
     modified_id =[1 ,3 ,5 ,7 ,9 ,12 ,14 ,16 ,18 ,20]
 
-    input_shape =(112 ,112 ,64)
+    input_shape =(32,32,3)
 
     layer1 =ModifiedConv2D(filters=64,
                           kernel_size=(3 ,3),
@@ -198,5 +240,10 @@ if __name__ == "__main__":
     print layer1.compute_output_shape(input_shape)
     print layer1.A
     print layer1.template
-    print layer1.B
     print layer1.unmodified_kernel
+
+    weights = layer1.get_weights()
+    print np.array(weights[0]).shape
+    print np.array(weights[1]).shape
+    print np.array(weights[2]).shape
+    print np.array(weights[3]).shape

@@ -3,53 +3,64 @@ import sys,os
 import numpy as np
 import scipy.stats as stats
 
-import resnet
 from keras.layers.convolutional import Conv2D
 from termcolor import cprint
 from array import array
 
 from Bio import Cluster
+from resnet20 import resnet_cifar10_builder
+from resnet20_new import resnet_cifar10_builder_new
 
 ####################################
 ##config params
-pair_layers_num = 0
 kmeans_k=256
-r_thresh = 1
 filter_size = 3
-zero_thresh = 1e-4
+d_thresh = 0
 
 ####################################
 ## public API
-def modify_model(model, k=kmeans_k, file_save = None):
-
-    # 1 select conv layers
+def cluster_model_kernels(model, k=kmeans_k, t = 1):
+    # 1 get 3x3 conv layers
     conv_layers_list = get_conv_layers_list(model)
     cprint("selected conv layers is:" + str(conv_layers_list), "red")
 
-    # 2 get kernels stack
-    kernels_stack = get_kernels_stack(model, conv_layers_list)
-    print "num of kernels:" + str(np.shape(kernels_stack)[0])
-    # 3 modify with kmeans
-    modify_kernels_with_kmeans(kernels_stack, k=k, f_save=file_save)
-    set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list)
+    # 2 get kernels array
+    kernels_array = get_kernels_array(model, conv_layers_list)
+    print "num of kernels:" + str(np.shape(kernels_array)[0])
 
-def load_modified_model_from_file(model, file_load = None):
+    # 3 get clusterid and temp
+    cluster_id, temp_kernels = cluster_kernels(kernels_array, k=k, times=t)
 
-    # 1 select conv layers
+    return cluster_id, temp_kernels
+
+def modify_model(model, cluster_id, temp_kernels):
+    # 1 get 3x3 conv layers
     conv_layers_list = get_conv_layers_list(model)
     cprint("selected conv layers is:" + str(conv_layers_list), "red")
 
-    # 2 get kernels stack
-    kernels_stack = get_kernels_stack(model, conv_layers_list)
-    print "num of searched kernels:" + str(np.shape(kernels_stack)[0])
+    # 2 get kernels array
+    kernels_array = get_kernels_array(model, conv_layers_list)
+    print "num of kernels:" + str(np.shape(kernels_array)[0])
 
-    modify_kernels_with_centroids(kernels_stack, f_load=file_load)
-    set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list)
+    # 3 get coefficient a
+    coef_a = get_coefficient_a(kernels_array, cluster_id, temp_kernels)
 
+    # 4 build modified model
+    '''model_new = resnet_cifar10_builder_new(n = 3, version=1, input_shape=(32,32,3))
+    print 'rebuilding model done'
+
+    # 5 set new model weights
+    set_cluster_weights_to_model(model,model_new,
+                                 clusterid=cluster_id,
+                                 cdata=temp_kernels,
+                                 coef_a=coef_a,
+                                 conv_layers_list=conv_layers_list)
+
+    return model_new'''
+    set_cluster_weights_to_old_model(model, cluster_id,temp_kernels,coef_a,conv_layers_list)
 
 ########################################
 ## private API
-
 def get_conv_layers_list(model):
     '''
         only  choose layers which is conv layer, and its filter_size must be same as param "filter_size"
@@ -59,9 +70,9 @@ def get_conv_layers_list(model):
     for i,l in enumerate(layers):
         if isinstance(l, Conv2D) and l.kernel.shape.as_list()[:2] == [filter_size, filter_size]:
             res+= [i]
-    return res[:pair_layers_num]
+    return res
 
-def get_kernels_stack(model, conv_layers_list):
+def get_kernels_array(model, conv_layers_list):
     kernels_num = 0
 
     kernels_buf=array('d')
@@ -74,95 +85,83 @@ def get_kernels_stack(model, conv_layers_list):
                     kernels_buf.append(w)
                 kernels_num+=1
 
-    kernels_stack = np.frombuffer(kernels_buf,dtype=np.float).reshape(kernels_num,filter_size**2)
-    return kernels_stack
+    kernels_array = np.frombuffer(kernels_buf,dtype=np.float).reshape(kernels_num,filter_size**2)
+    return kernels_array
 
-
-def least_square(dataa, datab):
-    assert (dataa.shape == datab.shape)
-    dataa = dataa.reshape(-1)
-    datab = datab.reshape(-1)
-    a, b = np.polyfit(dataa, datab, 1)  ##notice the direction: datab = a*dataa + b
-    err = np.sum(np.abs(a * dataa + b - datab))
-    return (a, b, err)
-
-
-def modify_kernels_with_kmeans(kernels_array, k=kmeans_k, f_save=None):
-    kernels_num=np.shape(kernels_array)[0]
-
+def cluster_kernels(kernels_array, k=kmeans_k, times=1):
     print "start clustering"
 
-    clusterid, error, nfound = Cluster.kcluster(kernels_array, nclusters=k,dist='a')
+    clusterid = []
+    error_best = float('inf')
+    for i in range(times):
+        clusterid_single, error, nfound = Cluster.kcluster(kernels_array, nclusters=k, dist='x')
+        if error < error_best:
+            clusterid = clusterid_single
+            error_best = error
+    print 'error:', error_best
 
-    cdata, cmask = Cluster.clustercentroids(kernels_array,clusterid=clusterid,)
+    cdata, cmask = Cluster.clustercentroids(kernels_array, clusterid=clusterid, )
 
     print "end clustering"
 
-    avg_sum = 0
-    avg_sum_over_thresh=0
-    num_over_thresh=0
-    for i in range(kernels_num):
-        cent_id = clusterid[i]
-        kernel = kernels_array[i]
-        cent = cdata[cent_id]
-        a, b, err = least_square(cent, kernel)
-        r = abs(stats.pearsonr(kernel, cent)[0])
-        avg_sum += r
-        if r > r_thresh:
-            avg_sum_over_thresh+=r
-            kernels_array[i] = a * cent + b
-            num_over_thresh+=1
-    avg = avg_sum / kernels_num
-    avg_over_thresh=avg_sum_over_thresh/num_over_thresh
+    return clusterid, cdata
 
-    print "modified kernel num:", num_over_thresh
-    print "average r2: %6.4f\t"%(avg),"average r2 near: %6.4f"%(avg_over_thresh)
+def propotional_fitting(kernel, temp):
+    assert (kernel.shape == temp.shape)
+    kernel=kernel.reshape(-1)
+    temp = temp.reshape(-1)
+    # k = a * t
+    # a = sum(xiyi)/sum(xi^2)
+    a_num = np.sum(kernel * temp)
+    a_denom = np.sum(temp**2)
+    #assert(abs(a_denom) < 1e-33)
+    a = a_num/a_denom
+    err = abs(kernel - a * temp)
 
-    if f_save != None:
-        f_clusterid=f_save+"_clusterid.npy"
-        f_cdata=f_save+"_cdata.npy"
-        np.save(f_clusterid, clusterid)
-        np.save(f_cdata,cdata)
+    return a, err
 
-    return kernels_array
-
-def modify_kernels_with_centroids(kernels_array,f_load=None):
+def get_coefficient_a(kernels_array, clusterid, cdata):
     kernels_num = np.shape(kernels_array)[0]
+    coef_a=[]
 
-    try:
-        f_clusterid=f_load+"_clusterid.npy"
-        f_cdata = f_load + "_cdata.npy"
-        clusterid=np.load(f_clusterid)
-        cdata=np.load(f_cdata)
-    except:
-        print "cannot load file!"
-        sys.exit(0)
-
-    print "load centroid data done"
-
-    avg_sum = 0
-    avg_sum_over_thresh=0
-    num_over_thresh=0
+    avg=0
     for i in range(kernels_num):
         cent_id = clusterid[i]
         kernel = kernels_array[i]
         cent = cdata[cent_id]
-        a, b, err = least_square(cent, kernel)
-        r = abs(stats.pearsonr(kernel, cent)[0])
-        avg_sum += r
-        if r > r_thresh:
-            avg_sum_over_thresh+=r
-            kernels_array[i] = a * cent + b
-            num_over_thresh+=1
-    avg = avg_sum / kernels_num
-    avg_over_thresh=avg_sum_over_thresh/num_over_thresh
+        a, err = propotional_fitting(kernel, cent)
+        coef_a += [a]
+        avg += get_cos_dis(kernel,cent)/kernels_num
 
-    print "modified kernel num:", num_over_thresh
-    print "average r2:%6.4f"%(avg),"average r2 near:%6.4f"%(avg_over_thresh)
 
-    return kernels_array
+    print "average cos: %6.4f\t"%(avg)
 
-def set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list):
+    return coef_a
+
+def get_cos_dis(a, b):
+    num = sum(a*b)
+    denom=np.linalg.norm(a) * np.linalg.norm(b)
+    #assert(abs(denom) < 1e-32)
+    return 1 - abs(num / denom)
+
+def set_cluster_weights_to_model(model, model_new, clusterid, cdata, coef_a, conv_layers_list):
+    kernel_index = 0
+    for l in conv_layers_list:
+        weights = model.layers[l].get_weights()
+        weights_new = model_new.layers[l].get_weights()
+        kernels_num = model_new.layers[l].kernel_num
+
+        weights_new[1] = np.array(coef_a[kernel_index:kernel_index + kernels_num])
+        weights_new[2] = weights[1]
+
+        for i in range(kernels_num): ##kernel num
+            centroid_id=clusterid[kernel_index+i]
+            weights_new[3][:,:,i] = np.array(cdata[centroid_id].reshape(filter_size,filter_size))
+
+        model_new.layers[l].set_weights(weights_new)
+        kernel_index += kernels_num
+
+    '''    
     kernels_id=0
     for l in conv_layers_list:
         weights = model.layers[l].get_weights()
@@ -170,6 +169,18 @@ def set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list):
             for s in range(model.layers[l].input_shape[-1]):  # kernel depth
                 weights[0][:, :, s, i] = kernels_stack[kernels_id].reshape(filter_size,filter_size)
                 kernels_id+=1
+        model.layers[l].set_weights(weights)'''
+def set_cluster_weights_to_old_model(model, clusterid, cdata, coef_a, conv_layers_list):
+    kernels_id = 0
+    for l in conv_layers_list:
+        weights = model.layers[l].get_weights()
+        for i in range(model.layers[l].filters):  ##kernel num
+            for s in range(model.layers[l].input_shape[-1]):  # kernel depth
+                cent=clusterid[kernels_id]
+                temp=cdata[cent]
+                a=coef_a[kernels_id]
+                weights[0][:, :, s, i] = np.array(a*temp).reshape(filter_size, filter_size)
+                kernels_id += 1
         model.layers[l].set_weights(weights)
 
 
@@ -178,27 +189,5 @@ def set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list):
 if __name__ == "__main__":
 
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
-    model = resnet.ResnetBuilder.build_resnet_18((3, 32, 32), 10)
-    model.load_weights("./resnet/weights.h5")
 
-    #ori_result = load_and_test(model)
-    #result_names = model.metrics_names
-
-    weights = model.layers[37].get_weights()[0]
-    print weights
-'''
-    pair_layers_num=15
-    conv_layers_list = get_conv_layers_list(model)
-    cprint("selected conv layers is:" + str(conv_layers_list), "red")
-
-    # 2 get kernels stack
-    kernels_stack = get_kernels_stack(model, conv_layers_list)
-    print "num of searched kernels:" + str(len(kernels_stack.keys()))
-
-    # 3 generate pairs
-    #pair_res = generate_pair_res(kernels_stack)
-    #load_modified_model_from_file(model, file_load="./tmp/kernel_pairs_0.95_1.txt")
-
-    set_modified_kernels_stack_to_model(model, kernels_stack, conv_layers_list)
-'''
 
