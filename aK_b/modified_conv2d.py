@@ -1,23 +1,25 @@
-import sys, os
+import sys,os
 
 from keras import backend as K
-from keras import activations,initializers,regularizers,constraints
+from keras import initializers,regularizers,constraints,activations
 
-from keras.engine import InputSpec,Layer
+from keras.engine import InputSpec
+from keras.engine.topology import Layer
 from keras.utils import conv_utils
 from keras.regularizers import l2
 
+import tensorflow as tf
+import numpy as np
 
 class ModifiedConv2D(Layer):
-
     def __init__(self,
                  filters,
                  kernel_size,
-                 strides=(1 ,1),
+                 strides=(1,1),
                  padding='valid',
                  data_format=None,
                  dilation_rate=1,
-                 #activation=None,
+                 activation=None,
                  use_bias=True,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros',
@@ -26,17 +28,17 @@ class ModifiedConv2D(Layer):
                  activity_regularizer=None,
                  kernel_constraint=None,
                  bias_constraint=None,
-                 modified_id=None,
                  **kwargs
                  ):
         super(ModifiedConv2D, self).__init__(**kwargs)
-        self.rank =2
+        self.rank=2
         self.filters = filters
-        self.kernel_size = conv_utils.normalize_tuple(kernel_size ,2 ,'kernel_size')
-        self.strides = conv_utils.normalize_tuple(strides ,2 ,'strides')
+        self.kernel_size = conv_utils.normalize_tuple(kernel_size,2,'kernel_size')
+        self.strides = conv_utils.normalize_tuple(strides,2,'strides')
         self.padding = conv_utils.normalize_padding(padding)
-        self.data_format =data_format
-        self.dilation_rate =conv_utils.normalize_tuple(dilation_rate ,2 ,'dilation_rate')
+        self.data_format=conv_utils.normalize_data_format(data_format)
+        self.dilation_rate=conv_utils.normalize_tuple(dilation_rate,2,'dilation_rate')
+        self.activation = activations.get(activation)
         self.use_bias = use_bias
         self.kernel_initializer = initializers.get(kernel_initializer)
         self.bias_initializer = initializers.get(bias_initializer)
@@ -46,51 +48,34 @@ class ModifiedConv2D(Layer):
         self.kernel_constraint = constraints.get(kernel_constraint)
         self.bias_constraint = constraints.get(bias_constraint)
         self.input_spec = InputSpec(ndim=self.rank + 2)
-        self.modified_id = modified_id
-
 
     def build(self, input_shape):
         if self.data_format=='channels_first':
-            channel_axis =1
+            channel_axis=1
         else:
             channel_axis = -1
-
         if input_shape[channel_axis] is None:
             raise ValueError('The channel dimension of the inputs '
                              'should be defined. Found `None`.')
         input_dim = input_shape[channel_axis]
 
-        kernel_num = input_dim * self.filters
-        if self.modified_id==None:
-            self.modified_id=range(kernel_num)
+        self.kernel_num=input_dim*self.filters
 
-        modified_num =len(self.modified_id)
-        unmodified_num =kernel_num -modified_num
-        unmodified_kernel_shape =self.kernel_size +(unmodified_num,)
-        template_shape =self.kernel_size + (modified_num,)
+        self.kernels_shape=self.kernel_size+(input_dim,self.filters)
 
-
-        self.unmodified_kernel = self.add_weight(shape=unmodified_kernel_shape,
-                                                 initializer=self.kernel_initializer,
-                                                 name='unmodified_kernel',
-                                                 trainable=True,
-                                                 regularizer=self.kernel_regularizer,
-                                                 constraint=self.kernel_constraint)
-
-        self.A =self.add_weight(shape=(modified_num,),
+        self.A=self.add_weight(shape=(input_dim,self.filters,),
                                initializer=self.kernel_initializer,
                                name='A',
                                trainable=True)
 
-        self.template =self.add_weight(shape=template_shape,
+        self.template=self.add_weight(shape=self.kernels_shape,
                                       initializer=self.kernel_initializer,
                                       name='template',
-                                      trainable=False,
-                                      )
+                                      trainable=False)
 
-        self.B =self.add_weight(shape=(modified_num,),
+        self.B=self.add_weight(shape=(input_dim,self.filters,),
                                initializer=self.kernel_initializer,
-                               name='A',
+                               name='B',
                                trainable=True)
 
         if self.use_bias:
@@ -101,23 +86,26 @@ class ModifiedConv2D(Layer):
                                         constraint=self.bias_constraint)
         else:
             self.bias = None
-
         # Set input spec.
         self.input_spec = InputSpec(ndim=self.rank + 2,
                                     axes={channel_axis: input_dim})
         self.built = True
 
+    def call(self, inputs, **kwargs):
+        self.kernel=self.A*self.template+self.B
 
-    def call(self,inputs,**kwargs):
-        self.modified_kernel =self.A *self.template +self.B
-        self.kernel =1
-        outputs =1
+        outputs=K.conv2d(inputs,
+                         self.kernel,
+                         strides=self.strides,
+                         padding=self.padding,
+                         data_format=self.data_format,
+                         dilation_rate=self.dilation_rate)
 
         if self.use_bias:
-            outputs =K.bias_add(
+            outputs=K.bias_add(
                 outputs,
                 self.bias,
-                data_format=self.data_format()
+                data_format=self.data_format
             )
 
         return outputs
@@ -135,7 +123,6 @@ class ModifiedConv2D(Layer):
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
             return (input_shape[0],) + tuple(new_space) + (self.filters,)
-
         if self.data_format == 'channels_first':
             space = input_shape[2:]
             new_space = []
@@ -147,7 +134,6 @@ class ModifiedConv2D(Layer):
                     stride=self.strides[i],
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
-
             return (input_shape[0], self.filters) + tuple(new_space)
 
 
@@ -159,7 +145,6 @@ class ModifiedConv2D(Layer):
             'padding': self.padding,
             'data_format': self.data_format,
             'dilation_rate': self.dilation_rate,
-            #'activation': activations.serialize(self.activation),
             'use_bias': self.use_bias,
             'kernel_initializer': initializers.serialize(self.kernel_initializer),
             'bias_initializer': initializers.serialize(self.bias_initializer),
@@ -169,34 +154,31 @@ class ModifiedConv2D(Layer):
             'kernel_constraint': constraints.serialize(self.kernel_constraint),
             'bias_constraint': constraints.serialize(self.bias_constraint)
         }
-
-        base_config =super(ModifiedConv2D, self).get_config()
-        return dict(list(base_config.items() ) +list(config.items()))
-
-
-
+        base_config=super(ModifiedConv2D, self).get_config()
+        return dict(list(base_config.items())+list(config.items()))
 
 if __name__ == "__main__":
-    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
-    _IMAGE_DATA_FORMAT ='channels_last'
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    _IMAGE_DATA_FORMAT='channels_last'
 
-    modified_id =[1 ,3 ,5 ,7 ,9 ,12 ,14 ,16 ,18 ,20]
-
-    input_shape =(112 ,112 ,64)
-
-    layer1 =ModifiedConv2D(filters=64,
-                          kernel_size=(3 ,3),
-                          strides=(1 ,1),
+    input_shape=(32,32,3)
+    layer1=ModifiedConv2D(filters=16,
+                          kernel_size=(3,3),
+                          strides=(1,1),
                           kernel_initializer="he_normal",
                           kernel_regularizer=l2(1e-4),
                           padding="same",
-                          #modified_id=modified_id,
                           data_format=_IMAGE_DATA_FORMAT)
-
     layer1.build(input_shape)
-    print layer1.data_format
     print layer1.compute_output_shape(input_shape)
     print layer1.A
     print layer1.template
     print layer1.B
-    print layer1.unmodified_kernel
+    print layer1.get_config()
+    print "########"
+    weights = layer1.get_weights()
+
+    print np.array(weights[0]).shape
+    print np.array(weights[1]).shape
+    print np.array(weights[2]).shape
+    print np.array(weights[3]).shape

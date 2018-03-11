@@ -1,59 +1,62 @@
 import os
 
-import model_modify as modi
-import model_train_and_test as trte
-import keras
-
 from keras.layers.convolutional import Conv2D
-from keras import initializers
 from termcolor import cprint
 
-import resnet
+from resnet20 import resnet_cifar10_builder
+from aK_b.model_modify import modify_model, cluster_model_kernels, \
+                              save_cluster_result, load_cluster_result
+from model_train_and_test import fine_tune, model_test, model_train
+from aK_b.modified_conv2d import ModifiedConv2D
 
-def print_conv_layer_info(model):
+from aK.model_modify_ak import modify_model_ak, cluster_model_kernels_ak, \
+                               save_cluster_result_ak, load_cluster_result_ak
+
+import numpy as np
+
+
+def print_conv_layer_info(model, modified = False):
     f = open("./tmp/conv_layers_info.txt", "w")
     f.write("layer index   filter number   filter shape(HWCK)\n")
 
     cprint("conv layer information:", "red")
+
+    layer_type = Conv2D
+    if modified:
+        layer_type = ModifiedConv2D
+
     for i, l in enumerate(model.layers):
-        if isinstance(l, Conv2D):
+        if isinstance(l, layer_type):
             print i, l.filters, l.kernel.shape.as_list()
             print >> f, i, l.filters, l.kernel.shape.as_list()
     f.close()
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    model = resnet.ResnetBuilder.build_resnet_10((3,32,32), 10)
-    model.load_weights("./weights/resnet10_weights.h5")
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+    model = resnet_cifar10_builder(n = 3, input_shape=(32,32,3))
+    #model = multi_gpu_model(model, 2)
+    model.load_weights("./weights/resnet20_cifar10_weights.183.h5")
 
-    keras.utils.plot_model(model, to_file="./tmp/resnet10.png")
+    #keras.utils.plot_model(model, to_file="./tmp/resnet_v1.png")
     print_conv_layer_info(model)
 
-    ori_result = trte.load_and_test(model)
-
-    pair_layers_num=8
     kmeans_k = 2048
-    modi.pair_layers_num = pair_layers_num
-    trte.pair_layers_num = modi.pair_layers_num
-    modi.r_thresh=0
+    file = "./tmp/resnet20_test_" + str(kmeans_k)
 
-    file="./tmp/resnet10_"+str(modi.pair_layers_num) + "_" + str(kmeans_k)
-    #modi.modify_model(model, k=kmeans_k, file_save=file)
-    modi.load_modified_model_from_file(model,file_load=file)
+    cluster_id, temp_kernels = cluster_model_kernels_ak(model, k=kmeans_k, t=1)
+    save_cluster_result_ak(cluster_id, temp_kernels, file)
+    #cluster_id, temp_kernels = load_cluster_result_ak(file)
 
-    #trte.fine_tune(model,epoch=20)
-    #trte.load_and_train(model, 200, None, True)
-    test_result = trte.load_and_test(model)
-    result_names = model.metrics_names
+    model_new = modify_model_ak(model, cluster_id, temp_kernels)
 
-    cprint("original test result:", "blue")
-    print result_names[0], ": ", ori_result[0]
-    print result_names[1], ": ", ori_result[1]
-    cprint("modified test result:", "blue")
-    print result_names[0], ": ", test_result[0]
-    print result_names[1], ": ", test_result[1]
+    #model_new = resnet_cifar10_builder(n=3, input_shape=(32, 32, 3), modified=True)
+    #model_new.load_weights('./weights/resnet20_cifar10_fine_tune_weights.256.h5')
 
-
+    #model_train(model, 32, 200,)
+    #print_conv_layer_info(model_new, modified=True)
+    model_test(model_new)
+    #model_test(model)
+    #fine_tune(model_new)
 
 if __name__ == "__main__":
     main()
