@@ -102,8 +102,6 @@ def get_weighted_layers_list(model):
             res += [i]
     return res
 
-
-
 def get_kernels_array(model, conv_layers_list):
     kernels_num = 0
 

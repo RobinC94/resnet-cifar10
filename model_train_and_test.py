@@ -131,7 +131,7 @@ def fine_tune(model, epochs=20, data_path = None):
                   optimizer=Adam(lr=lr_schedule(0)),
                   metrics=['accuracy'])
 
-    checkpoint = ModelCheckpoint(filepath='./weights/resnet20_cifar10_fine_tune_weights2.{epoch:02d}.h5',
+    checkpoint = ModelCheckpoint(filepath='./weights/resnet20_cifar10_fine_tune_weights.{epoch:02d}.h5',
                                  monitor='loss',
                                  save_best_only=False,
                                  save_weights_only=True)
