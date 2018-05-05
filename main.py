@@ -2,6 +2,7 @@ import os
 
 from keras.layers.convolutional import Conv2D
 from termcolor import cprint
+from keras.backend.tensorflow_backend import set_session
 
 from resnet20 import resnet_cifar10_builder
 from model_train_and_test import fine_tune, model_test, model_train
@@ -15,6 +16,7 @@ from aK.model_modify_ak import modify_model_ak, cluster_model_kernels_ak, \
 from aK.modified_conv2d_ak import ModifiedConv2DaK
 
 import numpy as np
+import tensorflow as tf
 
 def print_conv_layer_info(model):
     f = open("./tmp/conv_layers_info.txt", "w")
@@ -30,6 +32,10 @@ def print_conv_layer_info(model):
 
 def main():
     os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+    config = tf.ConfigProto()
+    config.gpu_options.per_process_gpu_memory_fraction = 0.3
+    set_session(tf.Session(config=config))
+
     model = resnet_cifar10_builder(n = 3, input_shape=(32,32,3))
     #model = multi_gpu_model(model, 2)
     model.load_weights("./weights/resnet20_cifar10_weights.183.h5")
@@ -42,9 +48,9 @@ def main():
 
     #cluster_id, temp_kernels = cluster_model_kernels_ak(model, k=kmeans_k, t=1)
     #save_cluster_result_ak(cluster_id, temp_kernels, file)
-    cluster_id, temp_kernels = load_cluster_result_ak(file)
+    cluster_id, temp_kernels = load_cluster_result(file)
 
-    model_new = modify_model_ak(model, cluster_id, temp_kernels)
+    model_new = modify_model(model, cluster_id, temp_kernels)
 
     #model_new = resnet_cifar10_builder(n=3, input_shape=(32, 32, 3), modified=True)
     #model_new.load_weights('./weights/resnet20_cifar10_fine_tune_weights.256.h5')
@@ -53,7 +59,7 @@ def main():
     #print_conv_layer_info(model_new, modified=True)
     #model_test(model_new)
     #model_test(model)
-    fine_tune(model_new)
+    fine_tune(model_new, epochs=40)
 
 if __name__ == "__main__":
     main()

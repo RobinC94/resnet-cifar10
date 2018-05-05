@@ -131,7 +131,7 @@ def fine_tune(model, epochs=20, data_path = None):
                   optimizer=Adam(lr=lr_schedule(0)),
                   metrics=['accuracy'])
 
-    checkpoint = ModelCheckpoint(filepath='./weights/resnet20_cifar10_fine_tune_weights.{epoch:02d}.h5',
+    checkpoint = ModelCheckpoint(filepath='./weights/resnet20_cifar10_fine_tune_weights.2048.{epoch:02d}.h5',
                                  monitor='loss',
                                  save_best_only=False,
                                  save_weights_only=True)
@@ -140,7 +140,7 @@ def fine_tune(model, epochs=20, data_path = None):
                                    cooldown=0,
                                    patience=5,
                                    min_lr=0.5e-6)
-    csv_logger = CSVLogger('./results/training_resnet20_cifar10_fine_tune.csv')
+    csv_logger = CSVLogger('./results/training_resnet20_cifar10_fine_tune.2048.csv')
 
     callbacks = [checkpoint, lr_reducer, lr_scheduler, csv_logger]
 
@@ -166,7 +166,7 @@ def fine_tune(model, epochs=20, data_path = None):
                         validation_data=(x_test, y_test),
                         epochs=epochs,
                         verbose=1,
-                        workers=8,
+                        workers=16,
                         use_multiprocessing=True,
                         callbacks=callbacks)
 
@@ -229,11 +229,11 @@ def lr_schedule(epoch):
 
 def lr_fine_tune_schedule(epoch):
     lr = 1e-4
-    if epoch > 18:
+    if epoch > 30:
         lr *= 5e-3
-    elif epoch > 12:
+    elif epoch > 20:
         lr *= 1e-2
-    elif epoch > 6:
+    elif epoch > 10:
         lr *= 1e-1
     print('Learning rate: ', lr)
     return lr
